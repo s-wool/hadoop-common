@@ -335,11 +335,12 @@ public class Dispatcher {
         proxySource.removePendingBlock(this);
         target.getDDatanode().removePendingBlock(this);
 
+        final Source dispatchSource = this.source;
         synchronized (this) {
-          reset();
+          this.reset();
         }
-        synchronized (Dispatcher.this) {
-          Dispatcher.this.notifyAll();
+        synchronized (dispatchSource) {
+          dispatchSource.notifyAll();
         }
       }
     }
@@ -751,8 +752,8 @@ public class Dispatcher {
         // Now we can not schedule any block to move and there are
         // no new blocks added to the source block list, so we wait.
         try {
-          synchronized (Dispatcher.this) {
-            Dispatcher.this.wait(1000); // wait for targets/sources to be idle
+          synchronized (this) {
+            this.wait(1000); // wait for targets/sources to be idle
           }
         } catch (InterruptedException ignored) {
         }

@@ -1005,6 +1005,15 @@ public class YarnConfiguration extends Configuration {
   public static final String NM_WINDOWS_SECURE_CONTAINER_GROUP =
       NM_PREFIX + "windows-secure-container-executor.group";
 
+  /**
+   * Delay between attempts to remove linux cgroup.
+   */
+  public static final String NM_LINUX_CONTAINER_CGROUPS_DELETE_DELAY =
+      NM_PREFIX + "linux-container-executor.cgroups.delete-delay-ms";
+
+  public static final long DEFAULT_NM_LINUX_CONTAINER_CGROUPS_DELETE_DELAY =
+      20;
+
   /** T-file compression types used to compress aggregated logs.*/
   public static final String NM_LOG_AGG_COMPRESSION_TYPE = 
     NM_PREFIX + "log-aggregation.compression-type";

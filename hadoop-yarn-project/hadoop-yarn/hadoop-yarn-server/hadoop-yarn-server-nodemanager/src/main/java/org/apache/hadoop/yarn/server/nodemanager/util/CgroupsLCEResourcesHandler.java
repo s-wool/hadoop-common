@@ -20,9 +20,11 @@ package org.apache.hadoop.yarn.server.nodemanager.util;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -70,6 +72,7 @@ public class CgroupsLCEResourcesHandler implements LCEResourcesHandler {
   private final Map<String, String> controllerPaths; // Controller -> path
 
   private long deleteCgroupTimeout;
+  private long deleteCgroupDelay;
   // package private for testing purposes
   Clock clock;
 
@@ -103,6 +106,9 @@ public class CgroupsLCEResourcesHandler implements LCEResourcesHandler {
     this.deleteCgroupTimeout = conf.getLong(
         YarnConfiguration.NM_LINUX_CONTAINER_CGROUPS_DELETE_TIMEOUT,
         YarnConfiguration.DEFAULT_NM_LINUX_CONTAINER_CGROUPS_DELETE_TIMEOUT);
+    this.deleteCgroupDelay =
+        conf.getLong(YarnConfiguration.NM_LINUX_CONTAINER_CGROUPS_DELETE_DELAY,
+            YarnConfiguration.DEFAULT_NM_LINUX_CONTAINER_CGROUPS_DELETE_DELAY);
     // remove extra /'s at end or start of cgroupPrefix
     if (cgroupPrefix.charAt(0) == '/') {
       cgroupPrefix = cgroupPrefix.substring(1);
@@ -263,23 +269,87 @@ public class CgroupsLCEResourcesHandler implements LCEResourcesHandler {
     }
   }
 
+  /*
+   * Utility routine to print first line from cgroup tasks file
+   */
+  private void logLineFromTasksFile(File cgf) {
+    String str;
+    if (LOG.isDebugEnabled()) {
+      BufferedReader inl = null;
+      try {
+        inl = new BufferedReader(new InputStreamReader(
+            new FileInputStream(cgf + "/tasks"), "UTF-8"));
+        if ((str = inl.readLine()) != null) {
+          LOG.debug("First line in cgroup tasks file: " + cgf + " " + str);
+        }
+      } catch (IOException e) {
+        LOG.warn("Failed to read cgroup tasks file. ", e);
+      } finally {
+        if (inl != null) {
+          try {
+            inl.close();
+          } catch (IOException ignored) {
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * If tasks file is empty, delete the cgroup.
+   *
+   * @param cgf object referring to the cgroup to be deleted
+   * @return Boolean indicating whether cgroup was deleted
+   */
+  @VisibleForTesting
+  boolean checkAndDeleteCgroup(File cgf) throws InterruptedException {
+    boolean deleted = false;
+    FileInputStream in = null;
+    try {
+      in = new FileInputStream(cgf + "/tasks");
+      if (in.read() == -1) {
+        /*
+         * "tasks" file is empty, sleep a bit more and then try to delete the
+         * cgroup. Some versions of linux will occasionally panic due to a race
+         * condition in this area, hence the paranoia.
+         */
+        Thread.sleep(deleteCgroupDelay);
+        deleted = cgf.delete();
+        if (!deleted) {
+          LOG.warn("Failed attempt to delete cgroup: " + cgf);
+        }
+      } else {
+        logLineFromTasksFile(cgf);
+      }
+    } catch (IOException e) {
+      LOG.warn("Failed to read cgroup tasks file. ", e);
+    } finally {
+      try {
+        if (in != null) {
+          in.close();
+        }
+      } catch (IOException ignored) {
+      }
+    }
+    return deleted;
+  }
+
   @VisibleForTesting
   boolean deleteCgroup(String cgroupPath) {
-    boolean deleted;
-    
+    boolean deleted = false;
+
     if (LOG.isDebugEnabled()) {
       LOG.debug("deleteCgroup: " + cgroupPath);
     }
-
     long start = clock.getTime();
     do {
-      deleted = new File(cgroupPath).delete();
-      if (!deleted) {
-        try {
-          Thread.sleep(20);
-        } catch (InterruptedException ex) {
-          // NOP        
+      try {
+        deleted = checkAndDeleteCgroup(new File(cgroupPath));
+        if (!deleted) {
+          Thread.sleep(deleteCgroupDelay);
         }
+      } catch (InterruptedException ex) {
+        // NOP
       }
     } while (!deleted && (clock.getTime() - start) < deleteCgroupTimeout);
 
@@ -287,7 +357,6 @@ public class CgroupsLCEResourcesHandler implements LCEResourcesHandler {
       LOG.warn("Unable to delete cgroup at: " + cgroupPath +
           ", tried to delete for " + deleteCgroupTimeout + "ms");
     }
-
     return deleted;
   }
 
